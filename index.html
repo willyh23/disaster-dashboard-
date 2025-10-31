@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Hazard Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- MapLibre CSS -->
+  <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- MapLibre JS -->
+  <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+  <script>
+    // Initialize the map
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json', // You can swap this with a custom style later
+      center: [0, 20], // Starting position [lng, lat]
+      zoom: 2
+    });
+
+    // Add navigation controls
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+    map.on('load', () => {
+    map.addSource('earthquakes', {
+      type: 'geojson',
+      data: './data/earthquakes_global.geojson' // Adjust path if needed
+    });
+
+    map.addLayer({
+      id: 'quake-spikes',
+      type: 'circle',
+      source: 'earthquakes',
+      paint: {
+        'circle-radius': ['*', ['get', 'mag'], 2], // Scale by magnitude
+        'circle-color': '#ff6600',
+        'circle-opacity': 0.8,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': '#333'
+      }
+    });
+
+    map.on('click', 'quake-spikes', (e) => {
+      const props = e.features[0].properties;
+      const coords = e.features[0].geometry.coordinates;
+      new maplibregl.Popup()
+        .setLngLat([coords[0], coords[1]])
+        .setHTML(`
+          <strong>${props.title}</strong><br>
+          Magnitude: ${props.mag}<br>
+          Depth: ${coords[2]} km
+       `)
+       .addTo(map);
+    });
+
+    // Change cursor on hover
+    map.on('mouseenter', 'quake-spikes', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'quake-spikes', () => {
+      map.getCanvas().style.cursor = '';
+    });
+  });
+  </script>
+</body>
+</html>
