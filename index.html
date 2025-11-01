@@ -9,10 +9,40 @@
   <style>
     body, html { margin: 0; padding: 0; height: 100%; }
     #map { width: 100%; height: 100%; }
+    #zoom-tip {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.9);
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: sans-serif;
+      z-index: 999;
+      box-shadow: 0 0 4px rgba(0,0,0,0.2);
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="zoom-tip">🔍 Zoom in to view individual wildfire detections</div>
+
+  <label for="time-slider" style="position:absolute;top:50px;left:10px;z-index:999;background:white;padding:6px;border-radius:4px;font-family:sans-serif;">
+    🕒 Filter by Time (UTC):
+    <input type="range" id="time-slider" min="0" max="23" value="0" />
+    <span id="time-label">00:00</span>
+    <button id="reset-time" style="margin-left:10px;">Reset</button>
+  </label>
+
+  <label for="confidence-filter" style="position:absolute;top:90px;left:10px;z-index:999;background:white;padding:6px;border-radius:4px;font-family:sans-serif;">
+    🔍 Confidence Level:
+    <select id="confidence-filter">
+      <option value="all">All</option>
+      <option value="high">High</option>
+      <option value="nominal">Nominal</option>
+      <option value="low">Low</option>
+    </select>
+  </label>
 
   <!-- MapLibre JS -->
   <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
@@ -34,20 +64,198 @@
       data: './data/earthquakes_global.geojson' // Adjust path if needed
     });
 
+    map.on('zoom', () => {
+      const zoomTip = document.getElementById('zoom-tip');
+      zoomTip.style.display = map.getZoom() >= 9 ? 'none' : 'block';
+    });
+
+    map.addSource('wildfires', {
+      type: 'geojson',
+      data: './data/wildfires.geojson'
+    });
+
     map.addLayer({
-      id: 'quake-spikes',
+      id: 'quake-circles',
       type: 'circle',
       source: 'earthquakes',
       paint: {
-        'circle-radius': ['*', ['get', 'mag'], 2], // Scale by magnitude
-        'circle-color': '#ff6600',
-        'circle-opacity': 0.8,
+        // Radius scales with magnitude
+        'circle-radius': ['interpolate', ['linear'], ['get', 'mag'],
+          0, 3,
+          3, 5,
+          5, 9,
+          7, 14
+        ],
+        'circle-blur': 0.2,
+
+       // Color scales with magnitude using Blue Gradient
+       'circle-color': ['interpolate', ['linear'], ['get', 'mag'],
+         0, '#0000FF',           // Blue
+         2, '#1F1FFF',           // Bluebonnet
+         3.5, '#4949FF',         // Ultramarine Blue
+         5, '#7879FF',           // Medium Slate Blue
+         6.5, '#A3A3FF',         // Maximum Blue Purple
+         8, '#BFBFFF'            // Vodka
+       ],
+
+      'circle-opacity': 0.8,
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': '#ffffff'
+     }
+   });
+
+    map.addLayer({
+      id: 'wildfire-heatmap',
+      type: 'heatmap',
+      source: 'wildfires',
+      maxzoom: 9, // Only visible below zoom level 9
+      paint: {
+        'heatmap-weight': ['interpolate', ['linear'], ['get', 'frp'], 0, 0, 100, 1],
+        'heatmap-intensity': 1,
+        'heatmap-radius': 20,
+        'heatmap-opacity': 0.6,
+        'heatmap-color': [
+          'interpolate',
+          ['linear'],
+          ['heatmap-density'],
+          0, 'rgba(0,0,0,0)',
+          0.2, 'orange',
+          0.4, 'red',
+          0.6, 'purple'
+        ]
+      }
+    });
+
+    map.addLayer({
+      id: 'wildfire-circles',
+      type: 'circle',
+      source: 'wildfires',
+      minzoom: 9, // Only visible at zoom level 9 and above
+      paint: {
+        'circle-radius': ['*', ['get', 'frp'], 0.5],
+        'circle-color': [
+          'match',
+          ['get', 'confidence'],
+          'high', '#ff0000',
+          'nominal', '#ff9900',
+          'low', '#ffff00',
+          '#cccccc'
+        ],
+        'circle-opacity': 0.7,
         'circle-stroke-width': 1,
         'circle-stroke-color': '#333'
       }
     });
 
-    map.on('click', 'quake-spikes', (e) => {
+    const slider = document.getElementById('time-slider');
+    const timeLabel = document.getElementById('time-label');
+
+    slider.addEventListener('input', () => {
+      const hour = parseInt(slider.value);
+      timeLabel.textContent = `${hour.toString().padStart(2, '0')}:00`;
+
+      // Filter wildfire-circles by hour
+      map.setFilter('wildfire-circles', [
+        '==',
+        ['to-number', ['slice', ['get', 'acq_time'], 0, 2]],
+        hour
+      ]);
+      map.setFilter('wildfire-heatmap', [
+        '==',
+        ['to-number', ['slice', ['get', 'acq_time'], 0, 2]],
+        hour
+      ]);
+    });
+
+    const resetBtn = document.getElementById('reset-time');
+
+    resetBtn.addEventListener('click', () => {
+      slider.value = 0;
+      timeLabel.textContent = 'All Hours';
+
+      // Remove time filter from both layers
+      map.setFilter('wildfire-circles', null);
+      map.setFilter('wildfire-heatmap', null);
+    });
+
+    const confidenceDropdown = document.getElementById('confidence-filter');
+
+    confidenceDropdown.addEventListener('change', () => {
+      applyWildfireFilters();
+    });
+
+    slider.addEventListener('input', () => {
+      timeLabel.textContent = `${slider.value.toString().padStart(2, '0')}:00`;
+      applyWildfireFilters();
+    });
+
+    resetBtn.addEventListener('click', () => {
+      slider.value = 0;
+      timeLabel.textContent = 'All Hours';
+      confidenceDropdown.value = 'all';
+      map.setFilter('wildfire-circles', null);
+      map.setFilter('wildfire-heatmap', null);
+    });
+
+    function applyWildfireFilters() {
+    const hour = parseInt(slider.value);
+    const confidence = confidenceDropdown.value;
+
+    let filters = [];
+
+    // Time filter
+    if (hour !== 0 || confidence !== 'all') {
+     filters.push([
+       '==',
+       ['to-number', ['slice', ['get', 'acq_time'], 0, 2]],
+       hour
+     ]);
+    }
+
+   // Confidence filter
+   if (confidence !== 'all') {
+     filters.push(['==', ['get', 'confidence'], confidence]);
+   }
+
+   const finalFilter = filters.length === 0 ? null : ['all', ...filters];
+
+   map.setFilter('wildfire-circles', finalFilter);
+   map.setFilter('wildfire-heatmap', finalFilter);
+ }
+
+    let firePopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false
+    });
+
+    map.on('mouseenter', 'wildfire-circles', () => {
+      map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'wildfire-circles', () => {
+      firePopup.remove();
+      map.getCanvas().style.cursor = '';
+    });
+
+    map.on('mousemove', 'wildfire-circles', (e) => {
+      const props = e.features[0].properties;
+      const coords = e.features[0].geometry.coordinates;
+
+      firePopup
+        .setLngLat(coords)
+        .setHTML(`
+          <strong>🔥 Wildfire Detection</strong><br>
+          <b>Brightness:</b> ${props.brightness}<br>
+          <b>Confidence:</b> ${props.confidence}<br>
+          <b>FRP:</b> ${props.frp} MW<br>
+          <b>Time:</b> ${props.acq_date} ${props.acq_time}<br>
+          <b>Satellite:</b> ${props.satellite} (${props.daynight === 'D' ? 'Day' : 'Night'})<br>
+          <b>Location:</b> ${coords[1].toFixed(2)}, ${coords[0].toFixed(2)}
+        `)
+        .addTo(map);
+    });
+
+    map.on('click', 'quake-circles', (e) => {
       const props = e.features[0].properties;
       const coords = e.features[0].geometry.coordinates;
       new maplibregl.Popup()
@@ -61,10 +269,10 @@
     });
 
     // Change cursor on hover
-    map.on('mouseenter', 'quake-spikes', () => {
+    map.on('mouseenter', 'quake-circles', () => {
       map.getCanvas().style.cursor = 'pointer';
     });
-    map.on('mouseleave', 'quake-spikes', () => {
+    map.on('mouseleave', 'quake-circles', () => {
       map.getCanvas().style.cursor = '';
     });
   });
