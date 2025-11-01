@@ -3,7 +3,7 @@ import json
 
 features = []
 
-with open('wildfires.txt', 'r') as f:
+with open('wildfires_global.txt', 'r') as f:
     reader = csv.DictReader(f)
     for row in reader:
         features.append({
